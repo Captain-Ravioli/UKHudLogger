@@ -17,13 +17,38 @@ namespace UKHudLogger
     public class Plugin : BaseUnityPlugin
     {
         private string hudsPath;
-        private int loadingPointer;
+        private int loadingPointer, hudSettingsPointer;
         private bool loadingHUD;
-        private string newHUDName;
-        private Rect windowRect = new Rect(Screen.width - 220, 0, 220, 120);
+        private Rect windowRect = new Rect(Screen.width / 2 - 330, Screen.height / 2 - 350, 660, 700);
+        private bool inMenu, newHUD;
         private bool saveHUD;
         private bool loadHUDAtStart = true;
         private ConfigEntry<int> pointerConfig;
+        private Texture2D arrow, flippedArrow, dreamed;
+        private Dictionary<int, object[]> previewHUDSettings = new Dictionary<int, object[]>
+        {
+            {0, new object[] {"HEALTH", 1, 0, 0}},
+            {1, new object[] {"HEALTH NUMBER", 1, 1, 1}},
+            {2, new object[] {"SOFT DAMAGE", 1, .39f, 0}},
+            {3, new object[] {"HARD DAMAGE", .35f, .35f, .35f}},
+            {4, new object[] {"OVERHEAL", 0, 1, 0}},
+            {5, new object[] {"STAMINA (FULL)", 0, .87f, 1}},
+            {6, new object[] {"STAMINA (CHARGING)", 0, .87f, 1}},
+            {7, new object[] {"STAMINA (EMPTY)", 1, 0, 0}},
+            {8, new object[] {"RAILCANNON (FULL)", .25f, .91f, 1}},
+            {9, new object[] {"RAILCANNON (CHARGING)", 1, 0, 0}},
+            {10, new object[] {"BLUE VARIATION", .25f, .91f, 1}},
+            {11, new object[] {"GREEN VARIATION", .27f, 1, .27f}},
+            {12, new object[] {"RED VARIATION", 1, .24f, .24f}},
+            {13, new object[] {"GOLD VARIATION", 1, .88f, .24f}}
+        };
+        private Color newColor = new Color(1, 1, 1, 1);
+        private string hexColor = "#FF0000", rgbColor = "255,0,0";
+        private GUIStyle labelStyle, buttonStyle, textFieldStyle;
+        private float[] settingsCache = {0, 0, 0};
+        private string newHUDName = "NEW HUD NAME", saveHUDButton;
+        private Font vcrFont;
+        bool saveHUDText;
 
         private void Awake()
         {
@@ -34,17 +59,29 @@ namespace UKHudLogger
             
             List<string> folders = Path.GetFullPath(@"ULTRAKILL.exe").Split('\\').ToList();
             folders.RemoveAt(folders.Count - 1);
-            folders.AddRange(new string[] {"BepInEx", "plugins", "HUDs"});
+            folders.AddRange(new string[] {"BepInEx", "plugins", "ULTRAHUD", "HUDs"});
             hudsPath = String.Join("\\", folders.ToArray());
             
             Debug.Log($"hudsPath: {hudsPath}");
             Directory.CreateDirectory(hudsPath);
-            Directory.CreateDirectory($@"{hudsPath}\Resources");
             if (Directory.GetFiles(hudsPath).Length == 0)
             {
                 loadingPointer = 0;
             }
             SceneManager.activeSceneChanged += OnSceneChanged;
+        }
+
+        private void Start()
+        {
+            arrow = new Texture2D(1024, 1024, TextureFormat.RGBA32, false);
+            arrow.LoadImage(File.ReadAllBytes($@"{Directory.GetCurrentDirectory()}\BepInEx\plugins\ULTRAHUD\Assets\Arrow.png"));
+            flippedArrow = new Texture2D(1024, 1024, TextureFormat.RGBA32, false);
+            flippedArrow.LoadImage(File.ReadAllBytes($@"{Directory.GetCurrentDirectory()}\BepInEx\plugins\ULTRAHUD\Assets\FlippedArrow.png"));
+            dreamed = new Texture2D(990, 990, TextureFormat.RGBA32, false);
+            dreamed.LoadImage(File.ReadAllBytes(@$"{Directory.GetCurrentDirectory()}\BepInEx\plugins\ULTRAHUD\Assets\dreamed.jpg"));
+
+            vcrFont = AssetBundle.LoadFromFile(@$"{Directory.GetCurrentDirectory()}\BepInEx\plugins\ULTRAHUD\Assets\Asset Bundles\font")
+                .LoadAllAssets<Font>()[0];
         }
         
         private void OnSceneChanged(Scene from, Scene to)
@@ -53,6 +90,9 @@ namespace UKHudLogger
             saveHUD = false;
             newHUDName = RandomString(8);
             loadHUDAtStart = true;
+            inMenu = false;
+            newHUD = false;
+            saveHUDText = false;
         }
 
         private void Update()
@@ -76,7 +116,12 @@ namespace UKHudLogger
                 saveHUD = true;
             }
             else if (Input.GetKeyDown(KeyCode.Escape) && saveHUD)
+            {
                 saveHUD = false;
+                inMenu = false;
+                newHUD = false;
+                saveHUDText = false;
+            }
             else if (Input.GetKeyDown(KeyCode.L) && !loadingHUD)
             {
                 loadingPointer++;
@@ -156,7 +201,7 @@ namespace UKHudLogger
                 if (!MonoSingleton<OptionsManager>.Instance.paused)
                 {
                     saveHUD = false;
-                    drawSuccess = false;
+                    saveHUDText = false;
                     newHUDName = RandomString(8);
                     break;
                 }
@@ -233,36 +278,331 @@ namespace UKHudLogger
                 .Select(s => s[Random.Range(0, s.Length)]).ToArray());
         }
 
-        private void OnGUI()
+        private void ApplyHUDColors()
         {
-            if (saveHUD)
-                windowRect = GUILayout.Window(0, windowRect, DrawWindow, string.Empty, GUILayout.MinWidth(220), GUILayout.MinHeight(120));
+            Color col = new Color(float.Parse(previewHUDSettings[0][1].ToString()), float.Parse(previewHUDSettings[0][2].ToString()), float.Parse(previewHUDSettings[0][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.health, col);
+            col = new Color(float.Parse(previewHUDSettings[1][1].ToString()), float.Parse(previewHUDSettings[1][2].ToString()), float.Parse(previewHUDSettings[1][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.healthText, col);
+            col = new Color(float.Parse(previewHUDSettings[2][1].ToString()), float.Parse(previewHUDSettings[2][2].ToString()), float.Parse(previewHUDSettings[2][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.healthAfterImage, col);
+            col = new Color(float.Parse(previewHUDSettings[3][1].ToString()), float.Parse(previewHUDSettings[3][2].ToString()), float.Parse(previewHUDSettings[3][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.antiHp, col);
+            col = new Color(float.Parse(previewHUDSettings[4][1].ToString()), float.Parse(previewHUDSettings[4][2].ToString()), float.Parse(previewHUDSettings[4][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.overheal, col);
+            col = new Color(float.Parse(previewHUDSettings[5][1].ToString()), float.Parse(previewHUDSettings[5][2].ToString()), float.Parse(previewHUDSettings[5][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.stamina, col);
+            col = new Color(float.Parse(previewHUDSettings[6][1].ToString()), float.Parse(previewHUDSettings[6][2].ToString()), float.Parse(previewHUDSettings[6][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.staminaCharging, col);
+            col = new Color(float.Parse(previewHUDSettings[7][1].ToString()), float.Parse(previewHUDSettings[7][2].ToString()), float.Parse(previewHUDSettings[7][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.staminaEmpty, col);
+            col = new Color(float.Parse(previewHUDSettings[8][1].ToString()), float.Parse(previewHUDSettings[8][2].ToString()), float.Parse(previewHUDSettings[8][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.railcannonFull, col);
+            col = new Color(float.Parse(previewHUDSettings[9][1].ToString()), float.Parse(previewHUDSettings[9][2].ToString()), float.Parse(previewHUDSettings[9][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.railcannonCharging, col);
+            col = new Color(float.Parse(previewHUDSettings[10][1].ToString()), float.Parse(previewHUDSettings[10][2].ToString()), float.Parse(previewHUDSettings[10][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.variationColors[0] =  col;
+            col = new Color(float.Parse(previewHUDSettings[11][1].ToString()), float.Parse(previewHUDSettings[11][2].ToString()), float.Parse(previewHUDSettings[11][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.variationColors[1] =  col;
+            col = new Color(float.Parse(previewHUDSettings[12][1].ToString()), float.Parse(previewHUDSettings[12][2].ToString()), float.Parse(previewHUDSettings[12][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.variationColors[2] =  col;
+            col = new Color(float.Parse(previewHUDSettings[13][1].ToString()), float.Parse(previewHUDSettings[13][2].ToString()), float.Parse(previewHUDSettings[13][3].ToString()));
+            MonoSingleton<ColorBlindSettings>.Instance.variationColors[3] =  col;
+
+            MonoSingleton<ColorBlindSettings>.Instance.UpdateHudColors();
+            MonoSingleton<ColorBlindSettings>.Instance.UpdateWeaponColors();
         }
 
-        private bool drawSuccess;
+        private void OnGUI()
+        {
+            labelStyle = new GUIStyle(GUI.skin.label);
+            buttonStyle = new GUIStyle(GUI.skin.button);
+            textFieldStyle = new GUIStyle(GUI.skin.textField);
+            labelStyle.alignment = TextAnchor.MiddleCenter;
+            labelStyle.font = vcrFont;
+            labelStyle.fontSize = 40;
+            buttonStyle.font = vcrFont;
+            buttonStyle.fontSize = 40;
+            buttonStyle.alignment = TextAnchor.MiddleCenter;
+            textFieldStyle.font = vcrFont;
+            textFieldStyle.fontSize = 20;
+            textFieldStyle.alignment = TextAnchor.MiddleCenter;
+
+            if (saveHUD)
+            {
+                GUI.backgroundColor = new Color(0.25f, 0.25f, 0.25f, 1);
+                windowRect = GUILayout.Window(0, windowRect, DrawWindow, "", GUILayout.MaxWidth(660), GUILayout.MaxHeight(700));
+            }
+        }
+
         private void DrawWindow(int id)
         {
             switch (id)
             {
                 case 0:
-                    if (!MonoSingleton<OptionsManager>.Instance.paused)
-                        return;
-                    string changedHUDName = GUILayout.TextField(newHUDName);
-                    if (changedHUDName != newHUDName && drawSuccess)
-                        drawSuccess = false;
-                    newHUDName = changedHUDName;
+                    if (!inMenu)
+                    {
+                        GUILayout.FlexibleSpace();
+                        if (GUILayout.Button("NEW HUD", buttonStyle, GUILayout.MaxWidth(646), GUILayout.MaxHeight(60)))
+                        {
+                            inMenu = true;
+                            newHUD = true;
+                        }
+                        if (GUILayout.Button("EDIT HUD", buttonStyle, GUILayout.MaxWidth(646), GUILayout.MaxHeight(60)))
+                        {}
+                        GUILayout.FlexibleSpace();
+                    }
+                    if (newHUD)
+                    {
+                        if (hudSettingsPointer < 0)
+                            hudSettingsPointer = previewHUDSettings.Count - 1;
+                        if (hudSettingsPointer >= previewHUDSettings.Count)
+                            hudSettingsPointer = 0;
 
-                    if (GUILayout.Button("Save HUD", GUILayout.MaxWidth(220), GUILayout.MaxHeight(30)))
-                    {
-                        drawSuccess = true;
-                        StartCoroutine(SaveNewHUD());
+                        newColor = new Color
+                            (float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString()),
+                            float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString()),
+                            float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString()));
+
+                        GUILayout.BeginHorizontal();
+                        GUILayout.FlexibleSpace();
+                        buttonStyle.fontSize = 30;
+                        if (GUILayout.Button("BACK", buttonStyle, GUILayout.MaxWidth(100), GUILayout.MaxHeight(40)))
+                        {
+                            inMenu = false;
+                            newHUD = false;
+                        }
+                        buttonStyle.fontSize = 40;
+                        GUILayout.EndHorizontal();
+
+                        GUILayout.BeginHorizontal();
+                        GUILayout.FlexibleSpace();
+                        if (newHUDName == "NEW HUD NAME")
+                        {
+                            GUI.contentColor = Color.gray;
+                            newHUDName = "NEW HUD NAME";
+                        }
+                        string newHUDNameCache = newHUDName;
+                        newHUDName = GUILayout.TextField(
+                            newHUDName, 25, textFieldStyle, GUILayout.MaxWidth(646), GUILayout.MaxHeight(60))
+                            .ToUpper();
+
+                        GUI.contentColor = Color.white;
+                        GUILayout.FlexibleSpace();
+                        GUILayout.EndHorizontal();
+
+                        GUILayout.Space(10);
+
+                        GUILayout.BeginHorizontal();
+                        GUILayout.FlexibleSpace();
+                        if (GUILayout.Button(flippedArrow, GUILayout.MaxWidth(50), GUILayout.MaxHeight(50)))
+                        {
+                            hudSettingsPointer--;
+                            newColor = new Color
+                                (float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString()),
+                                float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString()),
+                                float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString()));
+                            hexColor = $"#{ColorUtility.ToHtmlStringRGB(newColor)}";
+                            rgbColor = $"{Mathf.FloorToInt(newColor.r * 255)},{Mathf.FloorToInt(newColor.g * 255)},{Mathf.FloorToInt(newColor.b * 255)}";
+                        }
+                        GUI.contentColor = newColor;
+                        GUILayout.Label((string)previewHUDSettings[hudSettingsPointer][0], labelStyle, GUILayout.MaxWidth(490), GUILayout.MaxHeight(50));
+                        GUI.contentColor = Color.white;
+                        if (GUILayout.Button(arrow, buttonStyle, GUILayout.MaxWidth(50), GUILayout.MaxHeight(50)))
+                        {
+                            hudSettingsPointer++;
+                            newColor = new Color
+                                (float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString()),
+                                float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString()),
+                                float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString()));
+                            hexColor = $"#{ColorUtility.ToHtmlStringRGB(newColor)}";
+                            rgbColor = $"{Mathf.FloorToInt(newColor.r * 255)},{Mathf.FloorToInt(newColor.g * 255)},{Mathf.FloorToInt(newColor.b * 255)}";
+                        }   
+                        GUILayout.FlexibleSpace();
+                        GUILayout.EndHorizontal();
+
+                        GUILayout.Space(15);
+
+                        GUILayout.BeginHorizontal();
+                        GUILayout.FlexibleSpace();
+                        GUILayout.BeginVertical();
+                        GUI.contentColor = Color.red;
+                        GUILayout.Label("R ", labelStyle, GUILayout.MaxHeight(40));
+                        GUI.contentColor = Color.green;
+                        GUILayout.Label("G ", labelStyle, GUILayout.MaxHeight(40));
+                        GUI.contentColor = Color.blue;
+                        GUILayout.Label("B ", labelStyle, GUILayout.MaxHeight(40));
+                        if (true)
+                            GUI.contentColor = Color.white;
+                        GUILayout.EndVertical();
+                        GUILayout.BeginVertical();
+                        GUILayout.Space(20);
+                        GUI.backgroundColor = Color.red;
+                        previewHUDSettings[hudSettingsPointer][1] = GUILayout.HorizontalSlider(float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString()), 0, 1, GUILayout.MaxHeight(40), GUILayout.MaxWidth(420));
+                        GUI.backgroundColor = Color.green;
+                        previewHUDSettings[hudSettingsPointer][2] = GUILayout.HorizontalSlider(float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString()), 0, 1, GUILayout.MaxHeight(40), GUILayout.MaxWidth(420));
+                        GUI.backgroundColor = Color.blue;
+                        previewHUDSettings[hudSettingsPointer][3] = GUILayout.HorizontalSlider(float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString()), 0, 1, GUILayout.MaxHeight(40), GUILayout.MaxWidth(420));
+                        GUI.backgroundColor = Color.white;
+                        if (float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString()) != settingsCache[0] || float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString()) != settingsCache[1] || float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString()) != settingsCache[2])
+                        {
+                            newColor = new Color
+                                (float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString()),
+                                float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString()),
+                                float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString()));
+                            hexColor = $"#{ColorUtility.ToHtmlStringRGB(newColor)}";
+                            rgbColor = $"{Mathf.FloorToInt(newColor.r * 255)},{Mathf.FloorToInt(newColor.g * 255)},{Mathf.FloorToInt(newColor.b * 255)}";
+                        }
+                        settingsCache[0] = float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString());
+                        settingsCache[1] = float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString());
+                        settingsCache[2] = float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString());
+
+                        GUILayout.EndVertical();
+
+                        GUILayout.Space(20);
+
+                        GUILayout.BeginVertical();
+                        GUILayout.Label(newColor.r.ToString("0.00"), labelStyle, GUILayout.MaxHeight(40));
+                        GUILayout.Label(newColor.g.ToString("0.00"), labelStyle, GUILayout.MaxHeight(40));
+                        GUILayout.Label(newColor.b.ToString("0.00"), labelStyle, GUILayout.MaxHeight(40));
+                        GUILayout.EndVertical();
+                        GUILayout.FlexibleSpace();
+                        GUILayout.EndHorizontal();
+
+                        GUILayout.Space(2);
+
+                        GUILayout.BeginHorizontal();
+                        bool pressed = false;
+                        GUILayout.FlexibleSpace();
+                        try
+                        {
+                            hexColor = GUILayout.TextField($"#{hexColor.Substring(1)}", 7, textFieldStyle, GUILayout.MaxHeight(50), GUILayout.MaxWidth(100)).ToUpper();
+                        }   
+                        catch
+                        {
+                            hexColor = "#";
+                        }
+                        GUILayout.BeginVertical();
+                        GUILayout.Space(15f);
+                        buttonStyle.fontSize = 20;
+                        pressed = GUILayout.Button("APPLY", buttonStyle, GUILayout.MaxWidth(75), GUILayout.MaxHeight(30));
+                        buttonStyle.fontSize = 40;
+                        GUILayout.Space(15f);
+                        GUILayout.EndVertical();
+                        if (hexColor.Length == 7 && ColorUtility.TryParseHtmlString(hexColor, out Color nc) && pressed)
+                        {
+                            newColor = nc;
+                            previewHUDSettings[hudSettingsPointer][1] = newColor.r;
+                            previewHUDSettings[hudSettingsPointer][2] = newColor.g;
+                            previewHUDSettings[hudSettingsPointer][3] = newColor.b;
+                        }
+
+                        GUILayout.Space(15);
+
+                        bool isRgbValid = true;
+                        rgbColor = GUILayout.TextField(rgbColor, 11, textFieldStyle, GUILayout.MaxHeight(50), GUILayout.MaxWidth(150));
+                        string[] rgbs = rgbColor.Split(',');
+                        float[] vals = new float[3] {-1, -1, -1};
+                        if (rgbs.Length == 3)
+                        {
+                            for (int i = 0; i < 3; i++)
+                            {
+                                if (int.TryParse(rgbs[i], out int x))
+                                    vals[i] = x;
+                                else
+                                {
+                                    isRgbValid = false;
+                                }
+                            }
+
+                            for (int i = 0; i < 3; i++)
+                                if (vals[i] == -1)
+                                    isRgbValid = false;
+                        }
+                        else
+                            isRgbValid = false;
+
+                        pressed = false;
+                        GUILayout.BeginVertical();
+                        GUILayout.Space(15f);
+                        buttonStyle.fontSize = 20;
+                        pressed = GUILayout.Button("APPLY", buttonStyle, GUILayout.MaxWidth(75), GUILayout.MaxHeight(30));
+                        buttonStyle.fontSize = 40;
+                        GUILayout.Space(15f);
+                        GUILayout.EndVertical();
+                        if (isRgbValid && pressed)
+                        {
+                            newColor = new Color(float.Parse((vals[0]/255).ToString("F2")), float.Parse((vals[1]/255).ToString("F2")), float.Parse((vals[2]/255).ToString("F2")));
+                            previewHUDSettings[hudSettingsPointer][1] = newColor.r;
+                            previewHUDSettings[hudSettingsPointer][2] = newColor.g;
+                            previewHUDSettings[hudSettingsPointer][3] = newColor.b;
+                        }
+                        GUILayout.FlexibleSpace();
+                        GUILayout.EndHorizontal();
+
+                        GUILayout.Space(10);
+
+                        GUILayout.BeginHorizontal();
+                        GUILayout.FlexibleSpace();
+                        buttonStyle.fontSize = 30;
+                        if (GUILayout.Button("PREVIEW", buttonStyle, GUILayout.MaxHeight(60), GUILayout.MaxWidth(150)))
+                            ApplyHUDColors();
+                        buttonStyle.fontSize = 40;
+                        GUILayout.FlexibleSpace();
+                        GUILayout.EndHorizontal();
+
+                        GUILayout.BeginHorizontal();
+                        GUILayout.FlexibleSpace();
+                        buttonStyle.fontSize = 30;
+                        if (GUILayout.Button($"SAVE AS {newHUDName}?", buttonStyle, GUILayout.MaxWidth(646), GUILayout.MaxHeight(60)))
+                        {
+                            if (newHUDName == string.Empty
+                                || newHUDName.Contains("\\")
+                                || newHUDName.Contains("/")
+                                || newHUDName.Contains("*")
+                                || newHUDName.Contains("?")
+                                || newHUDName.Contains("|")
+                                || newHUDName.Contains("\"")
+                                || newHUDName.Contains(":")
+                                || newHUDName.Contains("<")
+                                || newHUDName.Contains(">"))
+                                saveHUDButton = $"COULDN'T SAVE {newHUDName}, ONLY THE ALPHABET, NUMBERS AND SPACE ARE VALID CHARACTERS";
+                            else
+                            {
+                                saveHUDButton = "SAVED {newHUDName}!";
+                                ApplyHUDColors();
+                                StartCoroutine(SaveNewHUD());
+                            }
+                            saveHUDText = true;
+                        }
+                        GUILayout.FlexibleSpace();
+                        GUILayout.EndHorizontal();
+
+                        GUILayout.BeginHorizontal();
+                        GUILayout.FlexibleSpace();
+                        if (newHUDNameCache == newHUDName && saveHUDText)
+                        {
+                            labelStyle.fontSize = 20;
+                            GUILayout.Label(saveHUDButton, labelStyle, GUILayout.MinWidth(600), GUILayout.MinHeight(25));
+                            labelStyle.fontSize = 40;
+                        }
+                        else
+                            saveHUDText = false;
+                        GUILayout.FlexibleSpace();
+                        GUILayout.EndHorizontal();
+
+                        GUILayout.FlexibleSpace();
+
+                        GUILayout.BeginHorizontal();
+                        GUILayout.FlexibleSpace();
+                        GUI.backgroundColor = new Color(0, 0, 0, 0);
+                        GUI.contentColor = newColor;
+                        GUILayout.Box(dreamed, GUILayout.MaxHeight(98), GUILayout.MaxWidth(635));
+                        GUI.backgroundColor = Color.black;
+                        GUILayout.FlexibleSpace();
+                        GUILayout.EndHorizontal();
                     }
-                    if (drawSuccess)
-                    {
-                        GUIStyle style = new GUIStyle(GUI.skin.GetStyle("Label"));
-                        style.alignment = TextAnchor.MiddleCenter;
-                        GUILayout.Label($"Successfully saved {newHUDName}!", style);
-                    }
+
                     break;
                 default:
                     break;
