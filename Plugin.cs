@@ -19,12 +19,14 @@ namespace UKHudLogger
         private string hudsPath;
         private int loadingPointer;
         private bool loadingHUD;
-        private bool firstTime;
+        private string newHUDName;
+        private Rect windowRect = new Rect(Screen.width - 220, 0, 220, 120);
+        private bool saveHUD;
+        private bool loadHUDAtStart = true;
         private ConfigEntry<int> pointerConfig;
 
         private void Awake()
         {
-            // Plugin startup logic
             Logger.LogInfo($"Plugin {PluginInfo.PLUGIN_GUID} is loaded!");
 
             pointerConfig = Config.Bind("Pointer", "Value", 0, "Next time the game loads, this will be the HUD that's loaded.");
@@ -37,29 +39,44 @@ namespace UKHudLogger
             
             Debug.Log($"hudsPath: {hudsPath}");
             Directory.CreateDirectory(hudsPath);
+            Directory.CreateDirectory($@"{hudsPath}\Resources");
             if (Directory.GetFiles(hudsPath).Length == 0)
             {
                 loadingPointer = 0;
-                firstTime = true;
             }
-            Application.quitting += Quit;
+            SceneManager.activeSceneChanged += OnSceneChanged;
+        }
+        
+        private void OnSceneChanged(Scene from, Scene to)
+        {
+            loadingHUD = false;
+            saveHUD = false;
+            newHUDName = RandomString(8);
+            loadHUDAtStart = true;
         }
 
         private void Update()
         {
+            if (loadHUDAtStart && 
+                (SceneManager.GetActiveScene().name.StartsWith("Level") || SceneManager.GetActiveScene().name.StartsWith("Endless")))
+            {
+                loadHUDAtStart = false;
+                StartCoroutine(LoadHUD(loadingPointer));
+            }
             if (Input.GetKeyDown(KeyCode.J) && !loadingHUD)
             {
                 loadingPointer--;
                 StartCoroutine(LoadHUD(loadingPointer));
             }
             else if (Input.GetKeyDown(KeyCode.I) && !loadingHUD)
-            {
                 StartCoroutine(DeleteHUD(loadingPointer));
-            }
-            else if (Input.GetKeyDown(KeyCode.K) && !loadingHUD)
+            else if (Input.GetKeyDown(KeyCode.K) && !loadingHUD && MonoSingleton<OptionsManager>.Instance.paused)
             {
-                StartCoroutine(SaveNewHUD());
+                MonoSingleton<OptionsManager>.Instance.pauseMenu.SetActive(false);
+                saveHUD = true;
             }
+            else if (Input.GetKeyDown(KeyCode.Escape) && saveHUD)
+                saveHUD = false;
             else if (Input.GetKeyDown(KeyCode.L) && !loadingHUD)
             {
                 loadingPointer++;
@@ -72,22 +89,18 @@ namespace UKHudLogger
             yield return new WaitForSeconds(val);
         }
 
-        private void Quit()
-        {
-            pointerConfig.Value = loadingPointer;
-        }
-
         private IEnumerator DeleteHUD(int pointer)
         {
             loadingHUD = true;
             string[] files = Directory.GetFiles(hudsPath);
             if (files.Length == 0)
-                yield return null;
+                yield break;
             File.Delete(files[pointer]);
+            pointerConfig.Value = loadingPointer;
             StartCoroutine(LoadHUD(--loadingPointer));
             loadingHUD = false;
 
-            yield return null;
+            yield break;
         }
 
         private IEnumerator SaveNewHUD()
@@ -133,24 +146,37 @@ namespace UKHudLogger
                 t2d.SetPixel(i, 0, colors[i]);
             }
             string[] files = Directory.GetFiles(hudsPath);
-            File.WriteAllBytes(hudsPath + $@"\{RandomString(8)}.png", t2d.EncodeToPNG());
+            File.WriteAllBytes(hudsPath + $@"\{newHUDName}.png", t2d.EncodeToPNG());
             Debug.Log("successfully written file, yay");
             loadingPointer = files.Length - 1;
+            pointerConfig.Value = loadingPointer;
             loadingHUD = false;
-            firstTime = false;
+            while (true)
+            {
+                if (!MonoSingleton<OptionsManager>.Instance.paused)
+                {
+                    saveHUD = false;
+                    drawSuccess = false;
+                    newHUDName = RandomString(8);
+                    break;
+                }
+            }
 
-            yield return null;
+            yield break;
         }
 
         private IEnumerator LoadHUD(int pointer)
         {
-            loadingHUD = true;
             if (!Directory.EnumerateFileSystemEntries(hudsPath).Any())
             {
                 loadingPointer = 0;
                 Debug.Log("no files");
-                yield return null;
+                yield break;
             }
+            if (!SceneManager.GetActiveScene().name.StartsWith("Level") && !SceneManager.GetActiveScene().name.StartsWith("Endless"))
+                yield break;
+            
+            loadingHUD = true;
             string[] files = Directory.GetFiles(hudsPath);
             Debug.Log($"files count: {files.Length}");
             if (pointer < 0)
@@ -159,6 +185,7 @@ namespace UKHudLogger
             if (pointer >= files.Length)
                 pointer = 0;
             loadingPointer = pointer;
+            pointerConfig.Value = loadingPointer;
 
             Debug.Log($"pointer: {pointer}");
             Texture2D t2d = new Texture2D(14, 1);
@@ -195,16 +222,51 @@ namespace UKHudLogger
             MonoSingleton<ColorBlindSettings>.Instance.UpdateWeaponColors();
             Debug.Log("loaded new hud");
             loadingHUD = false;
-            firstTime = false;
 
-            yield return null;
+            yield break;
         }
 
         public static string RandomString(int length)
         {
-            const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789()-_";
             return new string(Enumerable.Repeat(chars, length)
                 .Select(s => s[Random.Range(0, s.Length)]).ToArray());
+        }
+
+        private void OnGUI()
+        {
+            if (saveHUD)
+                windowRect = GUILayout.Window(0, windowRect, DrawWindow, string.Empty, GUILayout.MinWidth(220), GUILayout.MinHeight(120));
+        }
+
+        private bool drawSuccess;
+        private void DrawWindow(int id)
+        {
+            switch (id)
+            {
+                case 0:
+                    if (!MonoSingleton<OptionsManager>.Instance.paused)
+                        return;
+                    string changedHUDName = GUILayout.TextField(newHUDName);
+                    if (changedHUDName != newHUDName && drawSuccess)
+                        drawSuccess = false;
+                    newHUDName = changedHUDName;
+
+                    if (GUILayout.Button("Save HUD", GUILayout.MaxWidth(220), GUILayout.MaxHeight(30)))
+                    {
+                        drawSuccess = true;
+                        StartCoroutine(SaveNewHUD());
+                    }
+                    if (drawSuccess)
+                    {
+                        GUIStyle style = new GUIStyle(GUI.skin.GetStyle("Label"));
+                        style.alignment = TextAnchor.MiddleCenter;
+                        GUILayout.Label($"Successfully saved {newHUDName}!", style);
+                    }
+                    break;
+                default:
+                    break;
+            }
         }
     }
 }
