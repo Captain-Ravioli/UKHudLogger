@@ -344,7 +344,6 @@ namespace UKHudLogger
             buttonStyle.font = vcrFont;
             buttonStyle.fontSize = 40;
             buttonStyle.alignment = TextAnchor.MiddleCenter;
-            buttonStyle.wordWrap = true;
             textFieldStyle.font = vcrFont;
             textFieldStyle.fontSize = 20;
             textFieldStyle.alignment = TextAnchor.MiddleCenter;
@@ -353,7 +352,7 @@ namespace UKHudLogger
             if (enableGUI)
             {
                 GUI.backgroundColor = new Color(0.25f, 0.25f, 0.25f, 1);
-                windowRect = GUILayout.Window(0, windowRect, DrawWindow, "", GUILayout.MaxWidth(windowRect.width), GUILayout.MaxHeight(windowRect.height));
+                windowRect = GUILayout.Window(0, windowRect, DrawWindow, "", GUILayout.MaxWidth(660), GUILayout.MaxHeight(750));
             }
         }
 
@@ -416,7 +415,7 @@ namespace UKHudLogger
                         }
                         buttonStyle.fontSize = 40;
                         GUILayout.EndHorizontal();
-
+                        
                         GUILayout.BeginHorizontal();
                         GUILayout.FlexibleSpace();
                         string newHUDNameCache = newHUDName; // cache for checking whether to display save message or not
@@ -426,13 +425,13 @@ namespace UKHudLogger
                         GUI.contentColor = Color.white;
                         GUILayout.FlexibleSpace();
                         GUILayout.EndHorizontal();
-
+                        
                         GUILayout.Space(10);
 
                         // switch settings
                         GUILayout.BeginHorizontal();
                         GUILayout.FlexibleSpace();
-                        if (GUILayout.Button(flippedArrow, GUILayout.MaxWidth(50), GUILayout.MaxHeight(50)))
+                        if (GUILayout.Button("<", buttonStyle, GUILayout.MaxWidth(50), GUILayout.MaxHeight(50)))
                         {
                             hudSettingsPointer--;
                             newColor = new Color
@@ -442,10 +441,11 @@ namespace UKHudLogger
                             hexColor = $"#{ColorUtility.ToHtmlStringRGB(newColor)}";
                             rgbColor = $"{Mathf.FloorToInt(newColor.r * 255)},{Mathf.FloorToInt(newColor.g * 255)},{Mathf.FloorToInt(newColor.b * 255)}";
                         }
+                        
                         GUI.contentColor = newColor;
                         GUILayout.Label((string)newHUDSettings[hudSettingsPointer][0], labelStyle, GUILayout.MaxWidth(490), GUILayout.MaxHeight(50));
                         GUI.contentColor = Color.white;
-                        if (GUILayout.Button(arrow, buttonStyle, GUILayout.MaxWidth(50), GUILayout.MaxHeight(50)))
+                        if (GUILayout.Button(">", buttonStyle, GUILayout.MaxWidth(50), GUILayout.MaxHeight(50)))
                         {
                             hudSettingsPointer++;
                             newColor = new Color
@@ -457,7 +457,7 @@ namespace UKHudLogger
                         }   
                         GUILayout.FlexibleSpace();
                         GUILayout.EndHorizontal();
-
+                        
                         GUILayout.Space(15);
 
                         // rgb 0.00-1.00 sliders
@@ -644,7 +644,7 @@ namespace UKHudLogger
                         GUILayout.FlexibleSpace();
                         GUILayout.EndHorizontal();
                     }
-                    /*// if the player is in the delete HUD menu
+                    // if the player is in the delete HUD menu
                     if (delHUD)
                     {
                         string[] files = Directory.GetFiles(hudsPath);
@@ -680,9 +680,7 @@ namespace UKHudLogger
                             hudFilePointer--;
                             deleteHUDConfirmations = 2;
                         }
-                        GUI.contentColor = newColor;
                         GUILayout.Label(file, labelStyle, GUILayout.MaxWidth(490), GUILayout.MaxHeight(50));
-                        GUI.contentColor = Color.white;
                         if (GUILayout.Button(arrow, buttonStyle, GUILayout.MaxWidth(50), GUILayout.MaxHeight(50)))
                         {
                             hudFilePointer++;
@@ -732,7 +730,7 @@ namespace UKHudLogger
                         GUILayout.EndHorizontal();
 
                         GUILayout.Space(100);
-                    }*/
+                    }
                     break;
                 default:
                     break;
