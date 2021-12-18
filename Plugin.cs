@@ -11,21 +11,20 @@ using Color = UnityEngine.Color;
 using Random = UnityEngine.Random;
 
 namespace UKHudLogger
-{
+{    
     [BepInPlugin("cap.ultrakill.hudlogger", "UKHudLogger", "1.0.0")]
     [BepInProcess("ULTRAKILL.exe")]
     public class Plugin : BaseUnityPlugin
     {
-        private string hudsPath;
-        private int loadingPointer, hudSettingsPointer;
-        private bool loadingHUD;
-        private Rect windowRect = new Rect(Screen.width / 2 - 330, Screen.height / 2 - 350, 660, 700);
-        private bool inMenu, newHUD;
-        private bool saveHUD;
-        private bool loadHUDAtStart = true;
-        private ConfigEntry<int> pointerConfig;
-        private Texture2D arrow, flippedArrow, dreamed;
-        private Dictionary<int, object[]> previewHUDSettings = new Dictionary<int, object[]>
+        private string hudsPath; // where the HUDs are stored
+        private int hudFilePointer, hudSettingsPointer; // loadingPointer: points at what HUD to load, hudSettingsPointer: pointer for new HUD settings
+        private bool loadingHUD; // is a HUD being loaded?
+        private Rect windowRect = new Rect(Screen.width / 2 - 330, Screen.height / 2 - 375, 660, 750);
+        private bool enableGUI, inMenu, newHUD, delHUD; // enableGUI: show the ULTRAHUD menu and its sub-menus, inMenu: tells whether the player is in the ULTRAHUD menu, others are for what sub-menu the player selected
+        private bool loadHUDAtStart = true; // checks for loading the pointer'th HUD when entering a level
+        private ConfigEntry<int> pointerConfig; // saves pointer so when the player boots the game up, the same HUD will be loaded
+        private Texture2D arrow, flippedArrow, dreamed; // textures for HUD sub-menus
+        private Dictionary<int, object[]> newHUDSettings = new Dictionary<int, object[]>
         {
             {0, new object[] {"HEALTH", 1, 0, 0}},
             {1, new object[] {"HEALTH NUMBER", 1, 1, 1}},
@@ -41,38 +40,42 @@ namespace UKHudLogger
             {11, new object[] {"GREEN VARIATION", .27f, 1, .27f}},
             {12, new object[] {"RED VARIATION", 1, .24f, .24f}},
             {13, new object[] {"GOLD VARIATION", 1, .88f, .24f}}
-        };
-        private Color newColor = new Color(1, 1, 1, 1);
-        private string hexColor = "#FF0000", rgbColor = "255,0,0";
+        }; // new HUD settings, it's pretty self-explanatory
+        private Color newColor = new Color(1, 1, 1, 1); // preview color for current selected setting in the new/edit HUD sub-menu
+        private string hexColor = "#FF0000", rgbColor = "255,0,0"; // variables used to change current HUD setting
         private GUIStyle labelStyle, buttonStyle, textFieldStyle;
-        private float[] settingsCache = {0, 0, 0};
-        private string newHUDName = "NEW HUD NAME", saveHUDButton;
-        private Font vcrFont;
-        bool saveHUDText;
+        private float[] settingsCache = {0, 0, 0}; // cache for newHUDSettings, used to leave hex/rgbColor unchanged unless the sliders are changing values
+        private string newHUDName = "NEW HUD NAME", saveHUDMessage; // saveHUDMessage: when the new HUD is saved, this message will pop up
+        private Font vcrFont, broshKFont;
+        private bool displaySaveHUDMessage; // check for whether to display save HUD message or not
+        private int deleteHUDConfirmations = 2; // how many times the user has to confirm HUD deletion
 
         private void Awake()
         {
             Logger.LogInfo($"Plugin {PluginInfo.PLUGIN_GUID} is loaded!");
 
+            // retrieve pointer
             pointerConfig = Config.Bind("Pointer", "Value", 0, "Next time the game loads, this will be the HUD that's loaded.");
-            loadingPointer = pointerConfig.Value;
+            hudFilePointer = pointerConfig.Value;
             
+            // get hudsPath
             List<string> folders = Path.GetFullPath(@"ULTRAKILL.exe").Split('\\').ToList();
             folders.RemoveAt(folders.Count - 1);
             folders.AddRange(new string[] {"BepInEx", "plugins", "ULTRAHUD", "HUDs"});
             hudsPath = String.Join("\\", folders.ToArray());
-            
             Debug.Log($"hudsPath: {hudsPath}");
             Directory.CreateDirectory(hudsPath);
-            if (Directory.GetFiles(hudsPath).Length == 0)
-            {
-                loadingPointer = 0;
-            }
+
+            // check if loadingPointer exceeds number of HUDs
+            if (Directory.GetFiles(hudsPath).Length <= hudFilePointer)
+                hudFilePointer = 0;
+
             SceneManager.activeSceneChanged += OnSceneChanged;
         }
 
         private void Start()
         {
+            // assign HUD sub-menu images
             arrow = new Texture2D(1024, 1024, TextureFormat.RGBA32, false);
             arrow.LoadImage(File.ReadAllBytes($@"{Directory.GetCurrentDirectory()}\BepInEx\plugins\ULTRAHUD\Assets\Arrow.png"));
             flippedArrow = new Texture2D(1024, 1024, TextureFormat.RGBA32, false);
@@ -80,58 +83,64 @@ namespace UKHudLogger
             dreamed = new Texture2D(990, 990, TextureFormat.RGBA32, false);
             dreamed.LoadImage(File.ReadAllBytes(@$"{Directory.GetCurrentDirectory()}\BepInEx\plugins\ULTRAHUD\Assets\dreamed.jpg"));
 
-            vcrFont = AssetBundle.LoadFromFile(@$"{Directory.GetCurrentDirectory()}\BepInEx\plugins\ULTRAHUD\Assets\Asset Bundles\font")
-                .LoadAllAssets<Font>()[0];
+            // assign fonts
+            Font[] fonts = AssetBundle.LoadFromFile(@$"{Directory.GetCurrentDirectory()}\BepInEx\plugins\ULTRAHUD\Assets\Asset Bundles\font").LoadAllAssets<Font>();
+            broshKFont = fonts[0];
+            vcrFont = fonts[1];
         }
         
         private void OnSceneChanged(Scene from, Scene to)
         {
+            // reset variables
             loadingHUD = false;
-            saveHUD = false;
+            enableGUI = false;
             newHUDName = RandomString(8);
             loadHUDAtStart = true;
             inMenu = false;
             newHUD = false;
-            saveHUDText = false;
+            delHUD = false;
+            displaySaveHUDMessage = false;
         }
 
         private void Update()
         {
+            // load HUD if player just enterd a level
             if (loadHUDAtStart && 
                 (SceneManager.GetActiveScene().name.StartsWith("Level") || SceneManager.GetActiveScene().name.StartsWith("Endless")))
             {
                 loadHUDAtStart = false;
-                StartCoroutine(LoadHUD(loadingPointer));
+                StartCoroutine(LoadHUD(hudFilePointer));
             }
+
+            // load and save HUDs            
             if (Input.GetKeyDown(KeyCode.J) && !loadingHUD)
             {
-                loadingPointer--;
-                StartCoroutine(LoadHUD(loadingPointer));
+                hudFilePointer--;
+                StartCoroutine(LoadHUD(hudFilePointer));
             }
+
             else if (Input.GetKeyDown(KeyCode.I) && !loadingHUD)
-                StartCoroutine(DeleteHUD(loadingPointer));
+                StartCoroutine(DeleteHUD(hudFilePointer));
             else if (Input.GetKeyDown(KeyCode.K) && !loadingHUD && MonoSingleton<OptionsManager>.Instance.paused)
             {
                 MonoSingleton<OptionsManager>.Instance.pauseMenu.SetActive(false);
-                saveHUD = true;
+                enableGUI = true;
             }
-            else if (Input.GetKeyDown(KeyCode.Escape) && saveHUD)
+            // if in ULTRAHUD menu and press escape
+            else if (Input.GetKeyDown(KeyCode.Escape) && enableGUI)
             {
-                saveHUD = false;
                 inMenu = false;
+                enableGUI = false;
                 newHUD = false;
-                saveHUDText = false;
+                delHUD = false;
+                displaySaveHUDMessage = false;
             }
+
             else if (Input.GetKeyDown(KeyCode.L) && !loadingHUD)
             {
-                loadingPointer++;
-                StartCoroutine(LoadHUD(loadingPointer));
+                hudFilePointer++;
+                StartCoroutine(LoadHUD(hudFilePointer));
             }
-        }
-
-        private IEnumerator waitsecs(float val)
-        {
-            yield return new WaitForSeconds(val);
         }
 
         private IEnumerator DeleteHUD(int pointer)
@@ -141,8 +150,8 @@ namespace UKHudLogger
             if (files.Length == 0)
                 yield break;
             File.Delete(files[pointer]);
-            pointerConfig.Value = loadingPointer;
-            StartCoroutine(LoadHUD(--loadingPointer));
+            pointerConfig.Value = hudFilePointer;
+            StartCoroutine(LoadHUD(--hudFilePointer));
             loadingHUD = false;
 
             yield break;
@@ -152,6 +161,8 @@ namespace UKHudLogger
         {
             loadingHUD = true;
             Color[] colors = new Color[14];
+
+            // get colors from settings into an array, delay it so that lag spikes dont occur   
             colors[0] = MonoSingleton<ColorBlindSettings>.Instance.GetHudColor(HudColorType.health);
             yield return new WaitForSeconds(0.005f);
             colors[1] = MonoSingleton<ColorBlindSettings>.Instance.GetHudColor(HudColorType.healthAfterImage);
@@ -185,6 +196,7 @@ namespace UKHudLogger
                 colors[i].a = 1;
             }
 
+            // create image and save
             Texture2D t2d = new Texture2D(14, 1);
             for (int i = 0; i < 14; i++)
             {
@@ -193,15 +205,15 @@ namespace UKHudLogger
             string[] files = Directory.GetFiles(hudsPath);
             File.WriteAllBytes(hudsPath + $@"\{newHUDName}.png", t2d.EncodeToPNG());
             Debug.Log("successfully written file, yay");
-            loadingPointer = files.Length - 1;
-            pointerConfig.Value = loadingPointer;
+            hudFilePointer = files.Length - 1;
+            pointerConfig.Value = hudFilePointer;
             loadingHUD = false;
             while (true)
             {
                 if (!MonoSingleton<OptionsManager>.Instance.paused)
                 {
-                    saveHUD = false;
-                    saveHUDText = false;
+                    inMenu = false;
+                    displaySaveHUDMessage = false;
                     newHUDName = RandomString(8);
                     break;
                 }
@@ -212,12 +224,15 @@ namespace UKHudLogger
 
         private IEnumerator LoadHUD(int pointer)
         {
+
+            // if there are no files
             if (!Directory.EnumerateFileSystemEntries(hudsPath).Any())
             {
-                loadingPointer = 0;
+                hudFilePointer = 0;
                 Debug.Log("no files");
                 yield break;
             }
+            // if the player isn't in a level
             if (!SceneManager.GetActiveScene().name.StartsWith("Level") && !SceneManager.GetActiveScene().name.StartsWith("Endless"))
                 yield break;
             
@@ -229,12 +244,14 @@ namespace UKHudLogger
 
             if (pointer >= files.Length)
                 pointer = 0;
-            loadingPointer = pointer;
-            pointerConfig.Value = loadingPointer;
+            hudFilePointer = pointer;
+            pointerConfig.Value = hudFilePointer;
 
+            // get HUD from current pointer
             Debug.Log($"pointer: {pointer}");
             Texture2D t2d = new Texture2D(14, 1);
             t2d.LoadImage(File.ReadAllBytes(files[pointer]));
+            // apply colors to game settings
             MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.health, t2d.GetPixel(0, 0));
             yield return new WaitForSeconds(0.005f);
             MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.healthAfterImage, t2d.GetPixel(1, 0));
@@ -280,41 +297,44 @@ namespace UKHudLogger
 
         private void ApplyHUDColors()
         {
-            Color col = new Color(float.Parse(previewHUDSettings[0][1].ToString()), float.Parse(previewHUDSettings[0][2].ToString()), float.Parse(previewHUDSettings[0][3].ToString()));
+            // get colors from current settings and apply them
+            Color col = new Color(float.Parse(newHUDSettings[0][1].ToString()), float.Parse(newHUDSettings[0][2].ToString()), float.Parse(newHUDSettings[0][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.health, col);
-            col = new Color(float.Parse(previewHUDSettings[1][1].ToString()), float.Parse(previewHUDSettings[1][2].ToString()), float.Parse(previewHUDSettings[1][3].ToString()));
+            col = new Color(float.Parse(newHUDSettings[1][1].ToString()), float.Parse(newHUDSettings[1][2].ToString()), float.Parse(newHUDSettings[1][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.healthText, col);
-            col = new Color(float.Parse(previewHUDSettings[2][1].ToString()), float.Parse(previewHUDSettings[2][2].ToString()), float.Parse(previewHUDSettings[2][3].ToString()));
+            col = new Color(float.Parse(newHUDSettings[2][1].ToString()), float.Parse(newHUDSettings[2][2].ToString()), float.Parse(newHUDSettings[2][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.healthAfterImage, col);
-            col = new Color(float.Parse(previewHUDSettings[3][1].ToString()), float.Parse(previewHUDSettings[3][2].ToString()), float.Parse(previewHUDSettings[3][3].ToString()));
+            col = new Color(float.Parse(newHUDSettings[3][1].ToString()), float.Parse(newHUDSettings[3][2].ToString()), float.Parse(newHUDSettings[3][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.antiHp, col);
-            col = new Color(float.Parse(previewHUDSettings[4][1].ToString()), float.Parse(previewHUDSettings[4][2].ToString()), float.Parse(previewHUDSettings[4][3].ToString()));
+            col = new Color(float.Parse(newHUDSettings[4][1].ToString()), float.Parse(newHUDSettings[4][2].ToString()), float.Parse(newHUDSettings[4][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.overheal, col);
-            col = new Color(float.Parse(previewHUDSettings[5][1].ToString()), float.Parse(previewHUDSettings[5][2].ToString()), float.Parse(previewHUDSettings[5][3].ToString()));
+            col = new Color(float.Parse(newHUDSettings[5][1].ToString()), float.Parse(newHUDSettings[5][2].ToString()), float.Parse(newHUDSettings[5][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.stamina, col);
-            col = new Color(float.Parse(previewHUDSettings[6][1].ToString()), float.Parse(previewHUDSettings[6][2].ToString()), float.Parse(previewHUDSettings[6][3].ToString()));
+            col = new Color(float.Parse(newHUDSettings[6][1].ToString()), float.Parse(newHUDSettings[6][2].ToString()), float.Parse(newHUDSettings[6][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.staminaCharging, col);
-            col = new Color(float.Parse(previewHUDSettings[7][1].ToString()), float.Parse(previewHUDSettings[7][2].ToString()), float.Parse(previewHUDSettings[7][3].ToString()));
+            col = new Color(float.Parse(newHUDSettings[7][1].ToString()), float.Parse(newHUDSettings[7][2].ToString()), float.Parse(newHUDSettings[7][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.staminaEmpty, col);
-            col = new Color(float.Parse(previewHUDSettings[8][1].ToString()), float.Parse(previewHUDSettings[8][2].ToString()), float.Parse(previewHUDSettings[8][3].ToString()));
+            col = new Color(float.Parse(newHUDSettings[8][1].ToString()), float.Parse(newHUDSettings[8][2].ToString()), float.Parse(newHUDSettings[8][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.railcannonFull, col);
-            col = new Color(float.Parse(previewHUDSettings[9][1].ToString()), float.Parse(previewHUDSettings[9][2].ToString()), float.Parse(previewHUDSettings[9][3].ToString()));
+            col = new Color(float.Parse(newHUDSettings[9][1].ToString()), float.Parse(newHUDSettings[9][2].ToString()), float.Parse(newHUDSettings[9][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.SetHudColor(HudColorType.railcannonCharging, col);
-            col = new Color(float.Parse(previewHUDSettings[10][1].ToString()), float.Parse(previewHUDSettings[10][2].ToString()), float.Parse(previewHUDSettings[10][3].ToString()));
+            col = new Color(float.Parse(newHUDSettings[10][1].ToString()), float.Parse(newHUDSettings[10][2].ToString()), float.Parse(newHUDSettings[10][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.variationColors[0] =  col;
-            col = new Color(float.Parse(previewHUDSettings[11][1].ToString()), float.Parse(previewHUDSettings[11][2].ToString()), float.Parse(previewHUDSettings[11][3].ToString()));
+            col = new Color(float.Parse(newHUDSettings[11][1].ToString()), float.Parse(newHUDSettings[11][2].ToString()), float.Parse(newHUDSettings[11][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.variationColors[1] =  col;
-            col = new Color(float.Parse(previewHUDSettings[12][1].ToString()), float.Parse(previewHUDSettings[12][2].ToString()), float.Parse(previewHUDSettings[12][3].ToString()));
+            col = new Color(float.Parse(newHUDSettings[12][1].ToString()), float.Parse(newHUDSettings[12][2].ToString()), float.Parse(newHUDSettings[12][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.variationColors[2] =  col;
-            col = new Color(float.Parse(previewHUDSettings[13][1].ToString()), float.Parse(previewHUDSettings[13][2].ToString()), float.Parse(previewHUDSettings[13][3].ToString()));
+            col = new Color(float.Parse(newHUDSettings[13][1].ToString()), float.Parse(newHUDSettings[13][2].ToString()), float.Parse(newHUDSettings[13][3].ToString()));
             MonoSingleton<ColorBlindSettings>.Instance.variationColors[3] =  col;
 
+            // update colors
             MonoSingleton<ColorBlindSettings>.Instance.UpdateHudColors();
             MonoSingleton<ColorBlindSettings>.Instance.UpdateWeaponColors();
         }
 
         private void OnGUI()
         {
+            // set styles
             labelStyle = new GUIStyle(GUI.skin.label);
             buttonStyle = new GUIStyle(GUI.skin.button);
             textFieldStyle = new GUIStyle(GUI.skin.textField);
@@ -324,48 +344,70 @@ namespace UKHudLogger
             buttonStyle.font = vcrFont;
             buttonStyle.fontSize = 40;
             buttonStyle.alignment = TextAnchor.MiddleCenter;
+            buttonStyle.wordWrap = true;
             textFieldStyle.font = vcrFont;
             textFieldStyle.fontSize = 20;
             textFieldStyle.alignment = TextAnchor.MiddleCenter;
 
-            if (saveHUD)
+            // draw ULTRAHUD menu
+            if (enableGUI)
             {
                 GUI.backgroundColor = new Color(0.25f, 0.25f, 0.25f, 1);
-                windowRect = GUILayout.Window(0, windowRect, DrawWindow, "", GUILayout.MaxWidth(660), GUILayout.MaxHeight(700));
+                windowRect = GUILayout.Window(0, windowRect, DrawWindow, "", GUILayout.MaxWidth(windowRect.width), GUILayout.MaxHeight(windowRect.height));
             }
         }
 
         private void DrawWindow(int id)
         {
+            GUI.backgroundColor = Color.black;
             switch (id)
             {
                 case 0:
+                    // if player is in the main ULTRAHUD menu
                     if (!inMenu)
                     {
-                        GUILayout.FlexibleSpace();
+                        GUI.backgroundColor = new Color(0, 0, 0, 0);
+                        labelStyle.font = broshKFont;
+                        labelStyle.fontSize = 160;
+                        GUILayout.Label("<color=#ffd700>U</color><color=#FFF09F>LTRAH</color><color=#ffd700>U</color><color=#FFF09F>D</color>", labelStyle, GUILayout.MaxHeight(160), GUILayout.MaxWidth(646));
+                        labelStyle.fontSize = 40;
+                        labelStyle.font = vcrFont;
+                        GUI.backgroundColor = Color.black;
+                        GUILayout.Space(165);
                         if (GUILayout.Button("NEW HUD", buttonStyle, GUILayout.MaxWidth(646), GUILayout.MaxHeight(60)))
                         {
                             inMenu = true;
                             newHUD = true;
                         }
-                        if (GUILayout.Button("EDIT HUD", buttonStyle, GUILayout.MaxWidth(646), GUILayout.MaxHeight(60)))
-                        {}
+                        // // if (GUILayout.Button("EDIT HUD", buttonStyle, GUILayout.MaxWidth(646), GUILayout.MaxHeight(60)))
+                        // // {}
+                        // // GUILayout.Space(15);
+                        if (GUILayout.Button("<color=red>DELETE HUD</color>", buttonStyle, GUILayout.MaxWidth(646), GUILayout.MaxHeight(60)))
+                        {
+                            inMenu = true;
+                            delHUD = true;
+                        }
                         GUILayout.FlexibleSpace();
                     }
+                    // if player is in new HUD menu
                     if (newHUD)
                     {
+                        // wrap settings pointer
                         if (hudSettingsPointer < 0)
-                            hudSettingsPointer = previewHUDSettings.Count - 1;
-                        if (hudSettingsPointer >= previewHUDSettings.Count)
+                            hudSettingsPointer = newHUDSettings.Count - 1;
+                        if (hudSettingsPointer >= newHUDSettings.Count)
                             hudSettingsPointer = 0;
 
+                        // update display color
                         newColor = new Color
-                            (float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString()),
-                            float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString()),
-                            float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString()));
+                            (float.Parse(newHUDSettings[hudSettingsPointer][1].ToString()),
+                            float.Parse(newHUDSettings[hudSettingsPointer][2].ToString()),
+                            float.Parse(newHUDSettings[hudSettingsPointer][3].ToString()));
 
                         GUILayout.BeginHorizontal();
                         GUILayout.FlexibleSpace();
+
+                        // go back to ULTRAHUD menu
                         buttonStyle.fontSize = 30;
                         if (GUILayout.Button("BACK", buttonStyle, GUILayout.MaxWidth(100), GUILayout.MaxHeight(40)))
                         {
@@ -377,44 +419,39 @@ namespace UKHudLogger
 
                         GUILayout.BeginHorizontal();
                         GUILayout.FlexibleSpace();
-                        if (newHUDName == "NEW HUD NAME")
-                        {
-                            GUI.contentColor = Color.gray;
-                            newHUDName = "NEW HUD NAME";
-                        }
-                        string newHUDNameCache = newHUDName;
+                        string newHUDNameCache = newHUDName; // cache for checking whether to display save message or not
                         newHUDName = GUILayout.TextField(
                             newHUDName, 25, textFieldStyle, GUILayout.MaxWidth(646), GUILayout.MaxHeight(60))
                             .ToUpper();
-
                         GUI.contentColor = Color.white;
                         GUILayout.FlexibleSpace();
                         GUILayout.EndHorizontal();
 
                         GUILayout.Space(10);
 
+                        // switch settings
                         GUILayout.BeginHorizontal();
                         GUILayout.FlexibleSpace();
                         if (GUILayout.Button(flippedArrow, GUILayout.MaxWidth(50), GUILayout.MaxHeight(50)))
                         {
                             hudSettingsPointer--;
                             newColor = new Color
-                                (float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString()),
-                                float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString()),
-                                float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString()));
+                                (float.Parse(newHUDSettings[hudSettingsPointer][1].ToString()),
+                                float.Parse(newHUDSettings[hudSettingsPointer][2].ToString()),
+                                float.Parse(newHUDSettings[hudSettingsPointer][3].ToString()));
                             hexColor = $"#{ColorUtility.ToHtmlStringRGB(newColor)}";
                             rgbColor = $"{Mathf.FloorToInt(newColor.r * 255)},{Mathf.FloorToInt(newColor.g * 255)},{Mathf.FloorToInt(newColor.b * 255)}";
                         }
                         GUI.contentColor = newColor;
-                        GUILayout.Label((string)previewHUDSettings[hudSettingsPointer][0], labelStyle, GUILayout.MaxWidth(490), GUILayout.MaxHeight(50));
+                        GUILayout.Label((string)newHUDSettings[hudSettingsPointer][0], labelStyle, GUILayout.MaxWidth(490), GUILayout.MaxHeight(50));
                         GUI.contentColor = Color.white;
                         if (GUILayout.Button(arrow, buttonStyle, GUILayout.MaxWidth(50), GUILayout.MaxHeight(50)))
                         {
                             hudSettingsPointer++;
                             newColor = new Color
-                                (float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString()),
-                                float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString()),
-                                float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString()));
+                                (float.Parse(newHUDSettings[hudSettingsPointer][1].ToString()),
+                                float.Parse(newHUDSettings[hudSettingsPointer][2].ToString()),
+                                float.Parse(newHUDSettings[hudSettingsPointer][3].ToString()));
                             hexColor = $"#{ColorUtility.ToHtmlStringRGB(newColor)}";
                             rgbColor = $"{Mathf.FloorToInt(newColor.r * 255)},{Mathf.FloorToInt(newColor.g * 255)},{Mathf.FloorToInt(newColor.b * 255)}";
                         }   
@@ -423,6 +460,7 @@ namespace UKHudLogger
 
                         GUILayout.Space(15);
 
+                        // rgb 0.00-1.00 sliders
                         GUILayout.BeginHorizontal();
                         GUILayout.FlexibleSpace();
                         GUILayout.BeginVertical();
@@ -438,24 +476,24 @@ namespace UKHudLogger
                         GUILayout.BeginVertical();
                         GUILayout.Space(20);
                         GUI.backgroundColor = Color.red;
-                        previewHUDSettings[hudSettingsPointer][1] = GUILayout.HorizontalSlider(float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString()), 0, 1, GUILayout.MaxHeight(40), GUILayout.MaxWidth(420));
+                        newHUDSettings[hudSettingsPointer][1] = GUILayout.HorizontalSlider(float.Parse(newHUDSettings[hudSettingsPointer][1].ToString()), 0, 1, GUILayout.MaxHeight(40), GUILayout.MaxWidth(420));
                         GUI.backgroundColor = Color.green;
-                        previewHUDSettings[hudSettingsPointer][2] = GUILayout.HorizontalSlider(float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString()), 0, 1, GUILayout.MaxHeight(40), GUILayout.MaxWidth(420));
+                        newHUDSettings[hudSettingsPointer][2] = GUILayout.HorizontalSlider(float.Parse(newHUDSettings[hudSettingsPointer][2].ToString()), 0, 1, GUILayout.MaxHeight(40), GUILayout.MaxWidth(420));
                         GUI.backgroundColor = Color.blue;
-                        previewHUDSettings[hudSettingsPointer][3] = GUILayout.HorizontalSlider(float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString()), 0, 1, GUILayout.MaxHeight(40), GUILayout.MaxWidth(420));
-                        GUI.backgroundColor = Color.white;
-                        if (float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString()) != settingsCache[0] || float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString()) != settingsCache[1] || float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString()) != settingsCache[2])
+                        newHUDSettings[hudSettingsPointer][3] = GUILayout.HorizontalSlider(float.Parse(newHUDSettings[hudSettingsPointer][3].ToString()), 0, 1, GUILayout.MaxHeight(40), GUILayout.MaxWidth(420));
+                        GUI.backgroundColor = Color.black;
+                        if (float.Parse(newHUDSettings[hudSettingsPointer][1].ToString()) != settingsCache[0] || float.Parse(newHUDSettings[hudSettingsPointer][2].ToString()) != settingsCache[1] || float.Parse(newHUDSettings[hudSettingsPointer][3].ToString()) != settingsCache[2])
                         {
                             newColor = new Color
-                                (float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString()),
-                                float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString()),
-                                float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString()));
+                                (float.Parse(newHUDSettings[hudSettingsPointer][1].ToString()),
+                                float.Parse(newHUDSettings[hudSettingsPointer][2].ToString()),
+                                float.Parse(newHUDSettings[hudSettingsPointer][3].ToString()));
                             hexColor = $"#{ColorUtility.ToHtmlStringRGB(newColor)}";
                             rgbColor = $"{Mathf.FloorToInt(newColor.r * 255)},{Mathf.FloorToInt(newColor.g * 255)},{Mathf.FloorToInt(newColor.b * 255)}";
                         }
-                        settingsCache[0] = float.Parse(previewHUDSettings[hudSettingsPointer][1].ToString());
-                        settingsCache[1] = float.Parse(previewHUDSettings[hudSettingsPointer][2].ToString());
-                        settingsCache[2] = float.Parse(previewHUDSettings[hudSettingsPointer][3].ToString());
+                        settingsCache[0] = float.Parse(newHUDSettings[hudSettingsPointer][1].ToString());
+                        settingsCache[1] = float.Parse(newHUDSettings[hudSettingsPointer][2].ToString());
+                        settingsCache[2] = float.Parse(newHUDSettings[hudSettingsPointer][3].ToString());
 
                         GUILayout.EndVertical();
 
@@ -471,6 +509,7 @@ namespace UKHudLogger
 
                         GUILayout.Space(2);
 
+                        // hex and rgb 0-255 inputs
                         GUILayout.BeginHorizontal();
                         bool pressed = false;
                         GUILayout.FlexibleSpace();
@@ -492,9 +531,9 @@ namespace UKHudLogger
                         if (hexColor.Length == 7 && ColorUtility.TryParseHtmlString(hexColor, out Color nc) && pressed)
                         {
                             newColor = nc;
-                            previewHUDSettings[hudSettingsPointer][1] = newColor.r;
-                            previewHUDSettings[hudSettingsPointer][2] = newColor.g;
-                            previewHUDSettings[hudSettingsPointer][3] = newColor.b;
+                            newHUDSettings[hudSettingsPointer][1] = newColor.r;
+                            newHUDSettings[hudSettingsPointer][2] = newColor.g;
+                            newHUDSettings[hudSettingsPointer][3] = newColor.b;
                         }
 
                         GUILayout.Space(15);
@@ -510,9 +549,7 @@ namespace UKHudLogger
                                 if (int.TryParse(rgbs[i], out int x))
                                     vals[i] = x;
                                 else
-                                {
                                     isRgbValid = false;
-                                }
                             }
 
                             for (int i = 0; i < 3; i++)
@@ -533,15 +570,16 @@ namespace UKHudLogger
                         if (isRgbValid && pressed)
                         {
                             newColor = new Color(float.Parse((vals[0]/255).ToString("F2")), float.Parse((vals[1]/255).ToString("F2")), float.Parse((vals[2]/255).ToString("F2")));
-                            previewHUDSettings[hudSettingsPointer][1] = newColor.r;
-                            previewHUDSettings[hudSettingsPointer][2] = newColor.g;
-                            previewHUDSettings[hudSettingsPointer][3] = newColor.b;
+                            newHUDSettings[hudSettingsPointer][1] = newColor.r;
+                            newHUDSettings[hudSettingsPointer][2] = newColor.g;
+                            newHUDSettings[hudSettingsPointer][3] = newColor.b;
                         }
                         GUILayout.FlexibleSpace();
                         GUILayout.EndHorizontal();
 
                         GUILayout.Space(10);
 
+                        // preview button
                         GUILayout.BeginHorizontal();
                         GUILayout.FlexibleSpace();
                         buttonStyle.fontSize = 30;
@@ -551,11 +589,13 @@ namespace UKHudLogger
                         GUILayout.FlexibleSpace();
                         GUILayout.EndHorizontal();
 
+                        // save HUD
                         GUILayout.BeginHorizontal();
                         GUILayout.FlexibleSpace();
                         buttonStyle.fontSize = 30;
                         if (GUILayout.Button($"SAVE AS {newHUDName}?", buttonStyle, GUILayout.MaxWidth(646), GUILayout.MaxHeight(60)))
                         {
+                            // check for invalid characters
                             if (newHUDName == string.Empty
                                 || newHUDName.Contains("\\")
                                 || newHUDName.Contains("/")
@@ -566,33 +606,35 @@ namespace UKHudLogger
                                 || newHUDName.Contains(":")
                                 || newHUDName.Contains("<")
                                 || newHUDName.Contains(">"))
-                                saveHUDButton = $"COULDN'T SAVE {newHUDName}, ONLY THE ALPHABET, NUMBERS AND SPACE ARE VALID CHARACTERS";
+                                saveHUDMessage = $"COULDN'T SAVE {newHUDName}, ONLY THE ALPHABET, NUMBERS AND SPACE ARE VALID CHARACTERS";
                             else
                             {
-                                saveHUDButton = "SAVED {newHUDName}!";
+                                saveHUDMessage = $"SAVED {newHUDName}!";
                                 ApplyHUDColors();
                                 StartCoroutine(SaveNewHUD());
                             }
-                            saveHUDText = true;
+                            displaySaveHUDMessage = true;
                         }
                         GUILayout.FlexibleSpace();
                         GUILayout.EndHorizontal();
 
+                        // display save message
                         GUILayout.BeginHorizontal();
                         GUILayout.FlexibleSpace();
-                        if (newHUDNameCache == newHUDName && saveHUDText)
+                        if (newHUDNameCache == newHUDName && displaySaveHUDMessage)
                         {
                             labelStyle.fontSize = 20;
-                            GUILayout.Label(saveHUDButton, labelStyle, GUILayout.MinWidth(600), GUILayout.MinHeight(25));
+                            GUILayout.Label(saveHUDMessage, labelStyle, GUILayout.MinWidth(600), GUILayout.MinHeight(25));
                             labelStyle.fontSize = 40;
                         }
                         else
-                            saveHUDText = false;
+                            displaySaveHUDMessage = false;
                         GUILayout.FlexibleSpace();
                         GUILayout.EndHorizontal();
 
                         GUILayout.FlexibleSpace();
 
+                        // dreamed :kekW:
                         GUILayout.BeginHorizontal();
                         GUILayout.FlexibleSpace();
                         GUI.backgroundColor = new Color(0, 0, 0, 0);
@@ -602,7 +644,95 @@ namespace UKHudLogger
                         GUILayout.FlexibleSpace();
                         GUILayout.EndHorizontal();
                     }
+                    /*// if the player is in the delete HUD menu
+                    if (delHUD)
+                    {
+                        string[] files = Directory.GetFiles(hudsPath);
+                        // wrap file pointer
+                        if (hudFilePointer < 0)
+                            hudFilePointer = files.Length - 1;
+                        if (hudFilePointer >= files.Length)
+                            hudFilePointer = 0;
 
+                        string file = Path.GetFileName(files[hudFilePointer]).Replace(".png", "").ToUpper();
+
+                        GUILayout.BeginHorizontal();
+                        GUILayout.FlexibleSpace();
+
+                        // go back to ULTRAHUD menu
+                        buttonStyle.fontSize = 30;
+                        if (GUILayout.Button("BACK", buttonStyle, GUILayout.MaxWidth(100), GUILayout.MaxHeight(40)))
+                        {
+                            inMenu = false;
+                            delHUD = false;
+                            deleteHUDConfirmations = 2;
+                        }
+                        buttonStyle.fontSize = 40;
+                        GUILayout.EndHorizontal();
+
+                        GUILayout.Space(20);
+                        
+                        // switch between files to delete
+                        GUILayout.BeginHorizontal();
+                        GUILayout.FlexibleSpace();
+                        if (GUILayout.Button(flippedArrow, GUILayout.MaxWidth(50), GUILayout.MaxHeight(50)))
+                        {
+                            hudFilePointer--;
+                            deleteHUDConfirmations = 2;
+                        }
+                        GUI.contentColor = newColor;
+                        GUILayout.Label(file, labelStyle, GUILayout.MaxWidth(490), GUILayout.MaxHeight(50));
+                        GUI.contentColor = Color.white;
+                        if (GUILayout.Button(arrow, buttonStyle, GUILayout.MaxWidth(50), GUILayout.MaxHeight(50)))
+                        {
+                            hudFilePointer++;
+                            deleteHUDConfirmations = 2;
+                        }
+                        GUILayout.FlexibleSpace();
+                        GUILayout.EndHorizontal();
+
+                        GUILayout.Space(100);
+
+                        GUILayout.BeginHorizontal();
+                        GUILayout.FlexibleSpace();
+                        GUILayout.BeginVertical();
+                        GUILayout.FlexibleSpace();
+
+                        switch (deleteHUDConfirmations)
+                        {
+                            case 2:
+                                if (GUILayout.Button($"DELETE \"{file}?\"", buttonStyle, GUILayout.MaxWidth(646), GUILayout.MaxHeight(60)))
+                                    deleteHUDConfirmations--;
+                                break;
+                            case 1:
+                                if (GUILayout.Button($"<size=20>ARE YOU SURE? YOU'LL LOSE {file} FOREVER!</size>\n<size=5>(UNLESS YOU DIG IN YOUR RECYCLE BIN)</size>", buttonStyle, GUILayout.MaxWidth(646), GUILayout.MaxHeight(60)))
+                                    deleteHUDConfirmations--;
+                                break;
+                            case 0:
+                                if (GUILayout.Button($"<size=25>ARE YOU INSANE??? {file} WILL DIE!!!1!</size>", buttonStyle, GUILayout.MaxWidth(646), GUILayout.MaxHeight(60)))
+                                {
+                                    StartCoroutine(DeleteHUD(hudFilePointer));
+                                    deleteHUDConfirmations = 2;
+                                }
+                                break;
+                            default:
+                                break;
+                        }
+                        GUILayout.BeginHorizontal();
+                        GUILayout.FlexibleSpace();
+                        if (deleteHUDConfirmations != 2)
+                            if (GUILayout.Button("CANCEL ACTION", buttonStyle, GUILayout.MaxWidth(320), GUILayout.MaxHeight(60)))
+                                deleteHUDConfirmations = 2;
+                        GUILayout.FlexibleSpace();
+                        GUILayout.EndHorizontal();
+
+                        GUILayout.FlexibleSpace();
+                        GUILayout.EndVertical();
+                        GUILayout.FlexibleSpace();
+                        GUILayout.EndHorizontal();
+
+                        GUILayout.Space(100);
+                    }*/
                     break;
                 default:
                     break;
